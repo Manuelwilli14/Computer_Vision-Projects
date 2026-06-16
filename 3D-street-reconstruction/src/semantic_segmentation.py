@@ -54,9 +54,6 @@ def load_deeplab_model():
     return model, preprocess, categories
 
 
-# Mapping simplifié des classes VOC/COCO (poids par défaut torchvision) vers
-# nos super-catégories de scène urbaine. À adapter si vous chargez un modèle
-# Cityscapes (utiliser alors directement LABEL_TO_SUPERCAT de config.py).
 VOC_TO_SUPERCAT = {
     "car": "vehicle",
     "bus": "vehicle",

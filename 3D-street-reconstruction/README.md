@@ -114,6 +114,4 @@ The `data/` folder contains instructions for obtaining public RGB-D sequences (e
 - SAM segments without semantic labels by default: this project combines SAM (precise masks) with DeepLabV3 (class labels) to obtain reliable semantic masks
 - Fine-tuning with a model specifically trained on Cityscapes/Mapillary would improve performance in urban environments
 
-## License
 
-MIT
