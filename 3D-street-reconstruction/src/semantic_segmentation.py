@@ -68,11 +68,11 @@ VOC_TO_SUPERCAT = {
 
 
 def run_deeplab(model, preprocess, categories, image_pil):
-    """Retourne un masque (H, W) de super-catégories (str) à partir de DeepLabV3."""
+    #Returns a (H, W) mask of supercategories (str) from DeepLabV3
     batch = preprocess(image_pil).unsqueeze(0).to(DEVICE)
     with torch.no_grad():
         output = model(batch)["out"][0]
-    class_map = output.argmax(0).cpu().numpy()  # (H, W) ids de classes VOC/COCO
+    class_map = output.argmax(0).cpu().numpy()  # (H, W) class ids VOC/COCO
 
     h, w = class_map.shape
     supercat_map = np.full((h, w), SUPER_CAT_TO_ID["autre"], dtype=np.uint8)
@@ -80,11 +80,11 @@ def run_deeplab(model, preprocess, categories, image_pil):
     for class_id in np.unique(class_map):
         class_name = categories[class_id]
         super_cat = VOC_TO_SUPERCAT.get(class_name, "autre")
-        # Hypothèse : zones de "background" larges et basses = route ; en haut = ciel
+        # Hypothesis: large, low-lying “background” areas = road; at the top = sky
         supercat_map[class_map == class_id] = SUPER_CAT_TO_ID[super_cat]
 
-    # Heuristique simple pour distinguer route / bâtiment / ciel dans le "background"
-    # (utile avec les poids par défaut qui ne connaissent pas ces classes) :
+    # Simple heuristic to distinguish road / building / sky in the "background"
+    # (useful with default weights that don't know these classes) :
     bg_mask = class_map == categories.index("__background__") if "__background__" in categories else (class_map == 0)
     supercat_map = _refine_background(image_pil, bg_mask, supercat_map)
 
@@ -117,9 +117,8 @@ def _refine_background(image_pil, bg_mask, supercat_map):
     return supercat_map
 
 
-# ---------------------------------------------------------------------------
-# 2) Segment Anything (SAM) - affinage des masques par sur-segmentation
-# ---------------------------------------------------------------------------
+
+#Segment Anything Model (SAM) 
 def load_sam_model():
     from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
 
@@ -134,16 +133,16 @@ def load_sam_model():
     sam.to(DEVICE)
     mask_generator = SamAutomaticMaskGenerator(
         sam,
-        points_per_side=16,  # réduit pour la rapidité, augmenter pour plus de précision
+        points_per_side=16,  # Decrease for speed, increase for greater accuracy
     )
     return mask_generator
 
 
 def refine_with_sam(mask_generator, image_rgb, supercat_map):
     """
-    Génère des masques SAM (sur-segmentation précise) puis assigne à chacun
-    la super-catégorie majoritaire issue de DeepLabV3. Cela donne des contours
-    bien plus nets tout en conservant une sémantique de classe.
+    Generate SAM (precise oversegmentation) masks and then assigns each one
+    the majority supercategory from DeepLabV3. This results in
+    much sharper contours while preserving class semantics.
     """
     masks = mask_generator.generate(image_rgb)
     refined = supercat_map.copy()
@@ -159,9 +158,7 @@ def refine_with_sam(mask_generator, image_rgb, supercat_map):
     return refined
 
 
-# ---------------------------------------------------------------------------
 # Visualisation
-# ---------------------------------------------------------------------------
 def colorize_supercat_map(supercat_map):
     h, w = supercat_map.shape
     color_img = np.zeros((h, w, 3), dtype=np.uint8)
@@ -171,9 +168,7 @@ def colorize_supercat_map(supercat_map):
     return color_img
 
 
-# ---------------------------------------------------------------------------
-# Entrée principale
-# ---------------------------------------------------------------------------
+
 def segment_image(image_path, output_path=None, use_sam=True):
     image_pil = Image.open(image_path).convert("RGB")
 
