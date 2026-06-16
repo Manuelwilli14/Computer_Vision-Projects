@@ -93,10 +93,10 @@ def run_deeplab(model, preprocess, categories, image_pil):
 
 def _refine_background(image_pil, bg_mask, supercat_map):
     """
-    Heuristique de secours (sans modèle Cityscapes) : sépare le fond
-    en ciel / route / bâtiment selon la position verticale et la texture.
-    Remplacez cette fonction par l'inférence directe d'un modèle Cityscapes
-    pour un résultat robuste.
+    Fallback heuristic (without a Cityscapes model): separates the background
+    into sky, road, and building based on vertical position and texture.
+    Replace this function with direct inference from a Cityscapes model
+    for a robust result.
     """
     h, w = bg_mask.shape
     img = np.array(image_pil.resize((w, h)))
@@ -107,11 +107,11 @@ def _refine_background(image_pil, bg_mask, supercat_map):
             continue
         relative_y = y / h
         if relative_y < 0.35:
-            cat = "ciel"
+            cat = "sky"
         elif relative_y < 0.65:
-            cat = "batiment"
+            cat = "building"
         else:
-            cat = "route"
+            cat = "road"
         supercat_map[y, row_mask] = SUPER_CAT_TO_ID[cat]
 
     return supercat_map
