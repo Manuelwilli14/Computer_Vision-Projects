@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+
+# Checkpoints (gros fichiers de modèles)
+checkpoints/*.pth
+checkpoints/*.pt
+
+# Données (gros fichiers, à ne pas committer)
+data/color/*
+data/depth/*
+!data/color/.gitkeep
+!data/depth/.gitkeep
+
+# Sorties générées
+outputs/*
+!outputs/.gitkeep
+
+# Notebooks checkpoints
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
