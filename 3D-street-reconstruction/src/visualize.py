@@ -1,6 +1,6 @@
 """
-Visualisation d'un nuage de points / maillage 3D (résultat de la
-reconstruction ou de la fusion sémantique) avec Open3D.
+Visualization of a 3D point cloud / mesh (result of reconstruction or
+semantic fusion) with Open3D.
 """
 
 import argparse
@@ -12,7 +12,7 @@ from config import SUPER_CATEGORY_COLORS
 
 
 def print_legend():
-    print("\nLégende des couleurs (super-catégories) :")
+    print("\nColor legend (super-categories):")
     for name, rgb in SUPER_CATEGORY_COLORS.items():
         print(f"  {name:12s}: RGB{rgb}")
 
@@ -28,20 +28,20 @@ def visualize(path):
             geometry = o3d.io.read_triangle_mesh(path)
             geometry.compute_vertex_normals()
     else:
-        raise ValueError("Format de fichier non supporté (utiliser .ply)")
+        raise ValueError("Unsupported file format (use .ply)")
 
     print_legend()
     o3d.visualization.draw_geometries(
         [geometry],
-        window_name="Reconstruction 3D + Segmentation Sémantique",
+        window_name="3D Reconstruction + Semantic Segmentation",
         width=1280,
         height=720,
     )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Visualise un nuage de points ou maillage .ply")
-    parser.add_argument("path", help="Chemin du fichier .ply à visualiser")
+    parser = argparse.ArgumentParser(description="Visualize a .ply point cloud or mesh")
+    parser.add_argument("path", help="Path to the .ply file to visualize")
     args = parser.parse_args()
 
     visualize(args.path)
