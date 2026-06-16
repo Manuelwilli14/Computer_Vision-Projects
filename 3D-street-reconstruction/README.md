@@ -1,56 +1,56 @@
-# Reconstruction 3D + Segmentation Sémantique d'une Scène de Rue
+# 3D Reconstruction + Semantic Segmentation of a Street Scene
 
-Pipeline complet combinant **vision par ordinateur**, **deep learning** et **géométrie 3D** pour reconstruire une scène de rue à partir d'images et y identifier sémantiquement routes, voitures, bâtiments et végétation.
+A complete pipeline combining **computer vision**, **deep learning**, and **3D geometry** to reconstruct a street scene from images and semantically identify roads, cars, buildings, and vegetation.
 
-## Objectifs
+## Objectives
 
-- Reconstruire un nuage de points 3D d'une rue à partir de plusieurs images (Structure from Motion / RGB-D)
-- Segmenter sémantiquement chaque image (routes, voitures, bâtiments, végétation, ciel...)
-- Projeter les masques de segmentation 2D sur le nuage de points 3D pour obtenir une **scène 3D sémantiquement annotée**
-- Visualiser le résultat avec Open3D
+- Reconstruct a 3D point cloud of a street from multiple images (Structure from Motion / RGB-D)
+- Semantically segment each image (roads, cars, buildings, vegetation, sky...)
+- Project 2D segmentation masks onto the 3D point cloud to obtain a **semantically annotated 3D scene**
+- Visualize the result with Open3D
 
-## Stack technique
+## Tech Stack
 
-| Composant | Rôle |
+| Component | Role |
 |---|---|
-| **Open3D** | Reconstruction 3D, nuages de points, maillage, visualisation |
-| **PyTorch** | Backend deep learning |
-| **Segment Anything (SAM)** | Segmentation d'instances/masques |
-| **DeepLabV3 / Cityscapes (torchvision)** | Segmentation sémantique avec classes prédéfinies (route, voiture, bâtiment, végétation) |
-| **OpenCV** | Traitement d'images, calibration caméra |
+| **Open3D** | 3D reconstruction, point clouds, mesh, visualization |
+| **PyTorch** | Deep learning backend |
+| **Segment Anything (SAM)** | Instance/mask segmentation |
+| **DeepLabV3 / Cityscapes (torchvision)** | Semantic segmentation with predefined classes (road, car, building, vegetation) |
+| **OpenCV** | Image processing, camera calibration |
 
-## Architecture du pipeline
+## Pipeline Architecture
 
 ```
-images RGB-D / multi-vue
+RGB-D / multi-view images
         │
-        ├──► [1] Segmentation sémantique 2D (DeepLabV3 + SAM)
-        │         → masques : route, voiture, bâtiment, végétation, ciel...
+        ├──► [1] 2D Semantic Segmentation (DeepLabV3 + SAM)
+        │         → masks: road, car, building, vegetation, sky...
         │
-        ├──► [2] Reconstruction 3D (Open3D)
-        │         → nuage de points / maillage via RGB-D ou SfM
+        ├──► [2] 3D Reconstruction (Open3D)
+        │         → point cloud / mesh via RGB-D or SfM
         │
-        └──► [3] Fusion 2D→3D
-                  → chaque point 3D reçoit une étiquette sémantique
-                  → nuage de points coloré par classe
-                  → export .ply visualisable
+        └──► [3] 2D→3D Fusion
+                  → each 3D point receives a semantic label
+                  → point cloud colored by class
+                  → .ply export for visualization
 ```
 
-## Structure du projet
+## Project Structure
 
 ```
 3d-street-reconstruction/
 ├── README.md
 ├── requirements.txt
 ├── data/
-│   └── README.md          # comment obtenir/placer les données
+│   └── README.md          # instructions for obtaining/placing data
 ├── src/
 │   ├── config.py
 │   ├── semantic_segmentation.py   # DeepLabV3 (Cityscapes) + SAM
-│   ├── reconstruction.py          # Open3D RGB-D / SfM → nuage de points
-│   ├── fusion_2d_3d.py            # projection des labels sur le nuage 3D
-│   ├── visualize.py               # affichage Open3D
-│   └── pipeline.py                # orchestration complète
+│   ├── reconstruction.py          # Open3D RGB-D / SfM → point cloud
+│   ├── fusion_2d_3d.py            # projection of labels onto 3D point cloud
+│   ├── visualize.py               # Open3D display
+│   └── pipeline.py                # full orchestration
 ├── notebooks/
 │   └── demo.ipynb
 └── outputs/
@@ -65,55 +65,55 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Téléchargez le checkpoint SAM (modèle ViT-B, ~375 Mo) :
+Download the SAM checkpoint (ViT-B model, ~375 MB):
 ```bash
 wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth -P checkpoints/
 ```
 
-## Utilisation rapide
+## Quick Start
 
 ```bash
-# 1. Segmentation sémantique d'une image
+# 1. Semantic segmentation of an image
 python src/semantic_segmentation.py --image data/sample_street.jpg --output outputs/seg_mask.png
 
-# 2. Reconstruction 3D à partir de RGB-D (couleur + profondeur)
+# 2. 3D reconstruction from RGB-D (color + depth)
 python src/reconstruction.py --color data/color/ --depth data/depth/ --output outputs/scene.ply
 
-# 3. Fusion sémantique 2D → 3D
+# 3. 2D → 3D semantic fusion
 python src/fusion_2d_3d.py --pointcloud outputs/scene.ply --seg_dir outputs/segmentations/ --output outputs/scene_semantic.ply
 
-# 4. Pipeline complet
+# 4. Full pipeline
 python src/pipeline.py --data_dir data/ --output_dir outputs/
 
-# 5. Visualisation
+# 5. Visualization
 python src/visualize.py outputs/scene_semantic.ply
 ```
 
-## Classes sémantiques détectées
+## Detected Semantic Classes
 
-Basé sur les classes Cityscapes (regroupées) :
+Based on Cityscapes classes (grouped):
 
-| Classe | Couleur RVB |
+| Class | RGB Color |
 |---|---|
-| Route | (128, 64, 128) |
-| Voiture | (0, 0, 142) |
-| Bâtiment | (70, 70, 70) |
-| Végétation | (107, 142, 35) |
-| Ciel | (70, 130, 180) |
-| Trottoir | (244, 35, 232) |
-| Autre | (0, 0, 0) |
+| Road | (128, 64, 128) |
+| Car | (0, 0, 142) |
+| Building | (70, 70, 70) |
+| Vegetation | (107, 142, 35) |
+| Sky | (70, 130, 180) |
+| Sidewalk | (244, 35, 232) |
+| Other | (0, 0, 0) |
 
-## Données de test
+## Test Data
 
-Le dossier `data/` contient des instructions pour récupérer des séquences RGB-D publiques (ex : KITTI, TUM RGB-D, ou vos propres photos avec un capteur de profondeur / smartphone LiDAR).
+The `data/` folder contains instructions for obtaining public RGB-D sequences (e.g. KITTI, TUM RGB-D, or your own photos taken with a depth sensor / smartphone LiDAR).
 
-## Limitations & pistes d'amélioration
+## Limitations & Future Work
 
-- La reconstruction RGB-D nécessite des images de profondeur alignées (capteur LiDAR/Kinect, ou estimation de profondeur monoculaire via MiDaS/Depth Anything)
-- Pour une reconstruction sans capteur de profondeur, intégrer une étape SfM/MVS (ex : COLMAP) avant Open3D
-- SAM segmente sans étiquettes sémantiques par défaut : ce projet combine SAM (masques précis) avec DeepLabV3 (étiquettes de classes) pour obtenir des masques sémantiques fiables
-- Affiner avec un modèle entraîné spécifiquement sur Cityscapes/Mapillary pour de meilleures performances en environnement urbain
+- RGB-D reconstruction requires aligned depth images (LiDAR/Kinect sensor, or monocular depth estimation via MiDaS/Depth Anything)
+- For reconstruction without a depth sensor, integrate an SfM/MVS step (e.g. COLMAP) before Open3D
+- SAM segments without semantic labels by default: this project combines SAM (precise masks) with DeepLabV3 (class labels) to obtain reliable semantic masks
+- Fine-tuning with a model specifically trained on Cityscapes/Mapillary would improve performance in urban environments
 
-## Licence
+## License
 
 MIT
