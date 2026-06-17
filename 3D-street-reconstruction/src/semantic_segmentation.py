@@ -75,11 +75,11 @@ def run_deeplab(model, preprocess, categories, image_pil):
     class_map = output.argmax(0).cpu().numpy()  # (H, W) class ids VOC/COCO
 
     h, w = class_map.shape
-    supercat_map = np.full((h, w), SUPER_CAT_TO_ID["autre"], dtype=np.uint8)
+    supercat_map = np.full((h, w), SUPER_CAT_TO_ID["other"], dtype=np.uint8)
 
     for class_id in np.unique(class_map):
         class_name = categories[class_id]
-        super_cat = VOC_TO_SUPERCAT.get(class_name, "autre")
+        super_cat = VOC_TO_SUPERCAT.get(class_name, "other")
         # Hypothesis: large, low-lying “background” areas = road; at the top = sky
         supercat_map[class_map == class_id] = SUPER_CAT_TO_ID[super_cat]
 
