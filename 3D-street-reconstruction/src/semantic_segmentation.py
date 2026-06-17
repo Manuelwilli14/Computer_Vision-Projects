@@ -60,9 +60,9 @@ VOC_TO_SUPERCAT = {
     "train": "vehicle",
     "motorbike": "vehicle",
     "bicycle": "vehicle",
-    "person": "human",
+    "person": "other",
     "pottedplant": "vegetation",
-    "tvmonitor": "object",
+    "tvmonitor": "other",
     "background": "sky",  # fallback grossier
 }
 
