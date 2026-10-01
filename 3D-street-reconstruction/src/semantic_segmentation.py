@@ -2,8 +2,10 @@
 2D semantic segmentation of street images.
 
 Combines two approaches:
-- DeepLabV3 (torchvision, pre-trained on Cityscapes-like data via COCO/VOC->fallback) to obtain CLASS labels (road, car, building, vegetation...)
-- Segment Anything (SAM) to refine the edgess / propose precise masks that can be labeled using the output from DeepLabV3 (majority voting).
+- SegFormer-B0 (Hugging Face transformers, fine-tuned on Cityscapes) to obtain the
+  CLASS of each pixel among the 19 Cityscapes classes (road, car, building, vegetation...)
+- Segment Anything (SAM, optional) to refine the edges: precise masks that are labeled
+  using the output from SegFormer (majority voting).
 
 Output: a mask (H, W) where each pixel contains the supercategory ID
 (0..N-1, see config.SUPER_CATEGORIES) as well as a colored visualization image.
@@ -11,13 +13,14 @@ Output: a mask (H, W) where each pixel contains the supercategory ID
 """
 
 import argparse
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 import torch
-import torchvision
 from PIL import Image
 import cv2
+from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
 
 from config import (
     CITYSCAPES_CLASSES,
@@ -26,6 +29,8 @@ from config import (
     LABEL_TO_SUPERCAT,
     SAM_CHECKPOINT,
     SAM_MODEL_TYPE,
+    SEGFORMER_MODEL,
+    SEGFORMER_INPUT_PIXELS,
 )
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -34,98 +39,70 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 SUPER_CAT_LIST = list(SUPER_CATEGORIES.keys())
 SUPER_CAT_TO_ID = {name: i for i, name in enumerate(SUPER_CAT_LIST)}
 
+# Lookup table: Cityscapes class ID (0-18) -> supercategory ID
+CITYSCAPES_TO_SUPERCAT_ID = np.array(
+    [SUPER_CAT_TO_ID[LABEL_TO_SUPERCAT[i]] for i in range(len(CITYSCAPES_CLASSES))], dtype=np.uint8
+)
 
-# DeepLabV3 - Dense Semantic Segmentation
-def load_deeplab_model():
+
+# SegFormer - Dense Semantic Segmentation (Cityscapes)
+def _from_pretrained(cls):
+    # Use the local Hugging Face cache if the model was already downloaded (no network
+    # access at all), otherwise download it (first run only, ~15 MB)
+    try:
+        return cls.from_pretrained(SEGFORMER_MODEL, local_files_only=True)
+    except OSError:
+        return cls.from_pretrained(SEGFORMER_MODEL)
+
+
+@lru_cache(maxsize=None)  # load once, reuse for every frame of a sequence
+def load_segformer_model():
     """
-    Load a pre-trained DeepLabV3 model. 
-    By default, torchvision provides weights trained on COCO-with-VOC-labels (21 classes). 
-    For real-world “on-the-street” use, it is recommended to replace these weights 
-    with a model fine-tuned on Cityscapes (19 classes), loaded via torch.hub or a local checkpoint.
-
-    Here, we illustrate the architecture using the default weights and provide an adaptable class 
-    mapping (see map_voc_to_supercat).
+    Load SegFormer fine-tuned on Cityscapes. Its 19 output classes are in the
+    same order as config.CITYSCAPES_CLASSES, so they map directly to the
+    supercategories through config.LABEL_TO_SUPERCAT.
     """
-    weights = torchvision.models.segmentation.DeepLabV3_ResNet101_Weights.DEFAULT
-    model = torchvision.models.segmentation.deeplabv3_resnet101(weights=weights)
-    model.eval().to(DEVICE)
-    preprocess = weights.transforms()
-    categories = weights.meta["categories"]
-    return model, preprocess, categories
+    processor = _from_pretrained(SegformerImageProcessor)
+    model = _from_pretrained(SegformerForSemanticSegmentation).eval().to(DEVICE)
+    if model.config.num_labels != len(CITYSCAPES_CLASSES):
+        raise ValueError(
+            f"{SEGFORMER_MODEL} predicts {model.config.num_labels} classes, "
+            f"expected the {len(CITYSCAPES_CLASSES)} Cityscapes classes"
+        )
+    return model, processor
 
 
-VOC_TO_SUPERCAT = {
-    "car": "vehicle",
-    "bus": "vehicle",
-    "train": "vehicle",
-    "motorbike": "vehicle",
-    "bicycle": "vehicle",
-    "person": "other",
-    "pottedplant": "vegetation",
-    "tvmonitor": "other",
-    "background": "sky",  # fallback grossier
-}
+def run_segformer(model, processor, image_pil):
+    #Returns a (H, W) mask of supercategory IDs from SegFormer
+    w, h = image_pil.size
+    # Resize to ~SEGFORMER_INPUT_PIXELS pixels keeping the aspect ratio
+    # (the processor's default 512x512 would distort non-square images)
+    scale = (SEGFORMER_INPUT_PIXELS / (w * h)) ** 0.5
+    size = {"height": round(h * scale), "width": round(w * scale)}
+    inputs = processor(images=image_pil, size=size, return_tensors="pt").to(DEVICE)
 
-
-def run_deeplab(model, preprocess, categories, image_pil):
-    #Returns a (H, W) mask of supercategories (str) from DeepLabV3
-    batch = preprocess(image_pil).unsqueeze(0).to(DEVICE)
     with torch.no_grad():
-        output = model(batch)["out"][0]
-    class_map = output.argmax(0).cpu().numpy()  # (H, W) class ids VOC/COCO
+        logits = model(**inputs).logits  # (1, 19, h/4, w/4) Cityscapes class scores
+        # bring the scores back to the original resolution so that
+        # label pixel (u, v) = image/depth pixel (u, v)
+        logits = torch.nn.functional.interpolate(
+            logits, size=(h, w), mode="bilinear", align_corners=False
+        )
+    class_map = logits.argmax(1)[0].cpu().numpy()  # (H, W) Cityscapes class ids 0-18
 
-    h, w = class_map.shape
-    supercat_map = np.full((h, w), SUPER_CAT_TO_ID["other"], dtype=np.uint8)
-
-    for class_id in np.unique(class_map):
-        class_name = categories[class_id]
-        super_cat = VOC_TO_SUPERCAT.get(class_name, "other")
-        # Hypothesis: large, low-lying “background” areas = road; at the top = sky
-        supercat_map[class_map == class_id] = SUPER_CAT_TO_ID[super_cat]
-
-    # Simple heuristic to distinguish road / building / sky in the "background"
-    # (useful with default weights that don't know these classes) :
-    bg_mask = class_map == categories.index("__background__") if "__background__" in categories else (class_map == 0)
-    supercat_map = _refine_background(image_pil, bg_mask, supercat_map)
-
-    return supercat_map
-
-
-def _refine_background(image_pil, bg_mask, supercat_map):
-    """
-    Fallback heuristic (without a Cityscapes model): separates the background
-    into sky, road, and building based on vertical position and texture.
-    Replace this function with direct inference from a Cityscapes model
-    for a robust result.
-    """
-    h, w = bg_mask.shape
-    img = np.array(image_pil.resize((w, h)))
-
-    for y in range(h):
-        row_mask = bg_mask[y, :]
-        if not row_mask.any():
-            continue
-        relative_y = y / h
-        if relative_y < 0.35:
-            cat = "sky"
-        elif relative_y < 0.65:
-            cat = "building"
-        else:
-            cat = "road"
-        supercat_map[y, row_mask] = SUPER_CAT_TO_ID[cat]
-
-    return supercat_map
+    return CITYSCAPES_TO_SUPERCAT_ID[class_map]
 
 
 
-#Segment Anything Model (SAM) 
+#Segment Anything Model (SAM)
+@lru_cache(maxsize=None)
 def load_sam_model():
     from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
 
     if not SAM_CHECKPOINT.exists():
         raise FileNotFoundError(
-            f"Checkpoint SAM introuvable : {SAM_CHECKPOINT}\n"
-            "Téléchargez-le avec :\n"
+            f"SAM checkpoint not found: {SAM_CHECKPOINT}\n"
+            "Download it with:\n"
             "wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth -P checkpoints/"
         )
 
@@ -141,7 +118,7 @@ def load_sam_model():
 def refine_with_sam(mask_generator, image_rgb, supercat_map):
     """
     Generate SAM (precise oversegmentation) masks and then assigns each one
-    the majority supercategory from DeepLabV3. This results in
+    the majority supercategory from SegFormer. This results in
     much sharper contours while preserving class semantics.
     """
     masks = mask_generator.generate(image_rgb)
@@ -172,8 +149,8 @@ def colorize_supercat_map(supercat_map):
 def segment_image(image_path, output_path=None, use_sam=True):
     image_pil = Image.open(image_path).convert("RGB")
 
-    model, preprocess, categories = load_deeplab_model()
-    supercat_map = run_deeplab(model, preprocess, categories, image_pil)
+    model, processor = load_segformer_model()
+    supercat_map = run_segformer(model, processor, image_pil)
 
     if use_sam:
         try:
@@ -181,7 +158,7 @@ def segment_image(image_path, output_path=None, use_sam=True):
             image_rgb = np.array(image_pil)
             supercat_map = refine_with_sam(mask_generator, image_rgb, supercat_map)
         except FileNotFoundError as e:
-            print(f"[SAM] {e}\n[SAM] Étape SAM ignorée, utilisation de DeepLabV3 seul.")
+            print(f"[SAM] {e}\n[SAM] SAM step skipped, using SegFormer only.")
 
     color_map = colorize_supercat_map(supercat_map)
 
@@ -189,17 +166,17 @@ def segment_image(image_path, output_path=None, use_sam=True):
         cv2.imwrite(str(output_path), cv2.cvtColor(color_map, cv2.COLOR_RGB2BGR))
         label_path = Path(output_path).with_suffix(".labels.npy")
         np.save(label_path, supercat_map)
-        print(f"Masque coloré sauvegardé : {output_path}")
-        print(f"Labels bruts sauvegardés : {label_path}")
+        print(f"Colored mask saved: {output_path}")
+        print(f"Raw labels saved: {label_path}")
 
     return supercat_map, color_map
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Segmentation sémantique d'une image de rue")
-    parser.add_argument("--image", required=True, help="Chemin vers l'image d'entrée")
-    parser.add_argument("--output", required=True, help="Chemin du masque coloré de sortie (.png)")
-    parser.add_argument("--no-sam", action="store_true", help="Désactive le raffinement SAM")
+    parser = argparse.ArgumentParser(description="Semantic segmentation of a street image")
+    parser.add_argument("--image", required=True, help="Path to the input image")
+    parser.add_argument("--output", required=True, help="Path to the output colored mask (.png)")
+    parser.add_argument("--no-sam", action="store_true", help="Disable SAM refinement (faster)")
     args = parser.parse_args()
 
     segment_image(args.image, args.output, use_sam=not args.no_sam)

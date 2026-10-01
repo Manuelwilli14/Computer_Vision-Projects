@@ -15,8 +15,8 @@ A complete pipeline combining **computer vision**, **deep learning**, and **3D g
 |---|---|
 | **Open3D** | 3D reconstruction, point clouds, mesh, visualization |
 | **PyTorch** | Deep learning backend |
-| **Segment Anything (SAM)** | Instance/mask segmentation |
-| **DeepLabV3 / Cityscapes (torchvision)** | Semantic segmentation with predefined classes (road, car, building, vegetation) |
+| **SegFormer-B0 / Cityscapes (Hugging Face transformers)** | Semantic segmentation with the 19 Cityscapes classes (road, car, building, vegetation...) |
+| **Segment Anything (SAM)** | Optional: precise masks to refine the class edges |
 | **OpenCV** | Image processing, camera calibration |
 
 ## Pipeline Architecture
@@ -24,7 +24,7 @@ A complete pipeline combining **computer vision**, **deep learning**, and **3D g
 ```
 RGB-D / multi-view images
         │
-        ├──► [1] 2D Semantic Segmentation (DeepLabV3 + SAM)
+        ├──► [1] 2D Semantic Segmentation (SegFormer + optional SAM)
         │         → masks: road, car, building, vegetation, sky...
         │
         ├──► [2] 3D Reconstruction (Open3D)
@@ -43,16 +43,17 @@ RGB-D / multi-view images
 ├── README.md
 ├── requirements.txt
 ├── data/
-│   └── README.md          # instructions for obtaining/placing data
+│   ├── color/             # RGB images
+│   └── depth/             # aligned 16-bit depth images (same count, same order)
 ├── src/
 │   ├── config.py
-│   ├── semantic_segmentation.py   # DeepLabV3 (Cityscapes) + SAM
+│   ├── semantic_segmentation.py   # SegFormer-B0 (Cityscapes) + SAM
 │   ├── reconstruction.py          # Open3D RGB-D / SfM → point cloud
 │   ├── fusion_2d_3d.py            # projection of labels onto 3D point cloud
 │   ├── visualize.py               # Open3D display
 │   └── pipeline.py                # full orchestration
 ├── notebooks/
-│   └── demo.ipynb
+│   └── demoReconstruction.ipynb
 └── outputs/
     └── .gitkeep
 ```
@@ -61,11 +62,17 @@ RGB-D / multi-view images
 
 ```bash
 python -m venv venv
-source venv/bin/activate
+source venv/bin/activate        # Linux / macOS
+venv\Scripts\activate           # Windows
 pip install -r requirements.txt
 ```
 
-Download the SAM checkpoint (ViT-B model, ~375 MB):
+The SegFormer-B0 weights (~15 MB) are downloaded automatically from Hugging Face on the
+first run, then loaded from the local cache (`~/.cache/huggingface`). It runs on CPU in
+about 1 s per image.
+
+Optional — download the SAM checkpoint (ViT-B model, ~375 MB) to refine the class edges.
+Without it, the SAM step is skipped. SAM is slow without a GPU (`--no-sam` to disable it):
 ```bash
 wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth -P checkpoints/
 ```
@@ -73,14 +80,14 @@ wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth -P che
 ## Quick Start
 
 ```bash
-# 1. Semantic segmentation of an image
-python src/semantic_segmentation.py --image data/sample_street.jpg --output outputs/seg_mask.png
+# 1. Semantic segmentation of an image (add --no-sam to skip SAM)
+python src/semantic_segmentation.py --image data/color/0001.png --output outputs/segmentations/0001.png
 
 # 2. 3D reconstruction from RGB-D (color + depth)
 python src/reconstruction.py --color data/color/ --depth data/depth/ --output outputs/scene.ply
 
-# 3. 2D → 3D semantic fusion
-python src/fusion_2d_3d.py --pointcloud outputs/scene.ply --seg_dir outputs/segmentations/ --output outputs/scene_semantic.ply
+# 3. 2D → 3D semantic fusion (needs one .labels.npy per frame, produced by step 1)
+python src/fusion_2d_3d.py --color data/color/ --depth data/depth/ --labels outputs/segmentations/ --output outputs/scene_semantic.ply
 
 # 4. Full pipeline
 python src/pipeline.py --data_dir data/ --output_dir outputs/
@@ -89,29 +96,36 @@ python src/pipeline.py --data_dir data/ --output_dir outputs/
 python src/visualize.py outputs/scene_semantic.ply
 ```
 
+> **Depth scale:** set `DEPTH_SCALE` in `src/config.py` to match your sensor
+> (5000 for TUM RGB-D, the sample data; 1000 for RealSense / Azure Kinect).
+
 ## Detected Semantic Classes
 
-Based on Cityscapes classes (grouped):
+The 19 Cityscapes classes predicted by SegFormer are grouped into 6 supercategories
+(see `SUPER_CATEGORIES` in `src/config.py`):
 
-| Class | RGB Color |
-|---|---|
-| Road | (128, 64, 128) |
-| Car | (0, 0, 142) |
-| Building | (70, 70, 70) |
-| Vegetation | (107, 142, 35) |
-| Sky | (70, 130, 180) |
-| Sidewalk | (244, 35, 232) |
-| Other | (0, 0, 0) |
+| Supercategory | Cityscapes classes | RGB Color |
+|---|---|---|
+| road | road, sidewalk, terrain | (128, 64, 128) |
+| vehicle | car, truck, bus, train, motorcycle, bicycle, rider | (0, 0, 142) |
+| building | building, wall, fence | (70, 70, 70) |
+| vegetation | vegetation | (107, 142, 35) |
+| sky | sky | (70, 130, 180) |
+| other | pole, traffic light, traffic sign, person | (0, 0, 0) |
 
 ## Test Data
 
-The `data/` folder contains instructions for obtaining public RGB-D sequences (e.g. KITTI, TUM RGB-D, or your own photos taken with a depth sensor / smartphone LiDAR).
+Put an RGB-D sequence in `data/color/` and `data/depth/` (public datasets: KITTI, TUM RGB-D, or your own
+images taken with a depth sensor / smartphone LiDAR). The sample frame comes from TUM RGB-D, which is
+an **indoor** dataset: it is fine to test the 3D reconstruction, but the street classes of SegFormer
+are not meaningful on it.
 
 ## Limitations & Future Work
 
 - RGB-D reconstruction requires aligned depth images (LiDAR/Kinect sensor, or monocular depth estimation via MiDaS/Depth Anything)
 - For reconstruction without a depth sensor, integrate an SfM/MVS step (e.g. COLMAP) before Open3D
-- SAM segments without semantic labels by default: this project combines SAM (precise masks) with DeepLabV3 (class labels) to obtain reliable semantic masks
-- Fine-tuning with a model specifically trained on Cityscapes/Mapillary would improve performance in urban environments
+- SegFormer is trained on Cityscapes (car-mounted camera, European streets): it works best on similar street views
+- SegFormer-B0 is the lightest version (runs on CPU); for better accuracy, set `SEGFORMER_MODEL` in `src/config.py` to a larger version (e.g. B2), at the cost of a slower inference
+- SAM segments without semantic labels: this project combines SAM (precise masks) with SegFormer (class labels, majority vote per mask) to obtain sharper semantic masks
 
 

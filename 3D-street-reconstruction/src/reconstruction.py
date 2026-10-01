@@ -16,9 +16,16 @@ from pathlib import Path
 
 import numpy as np
 import open3d as o3d
-import cv2
+
 
 from config import DEFAULT_INTRINSICS, DEPTH_SCALE, DEPTH_TRUNC
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
+
+
+def list_images(folder):
+    #Sorted image files of a folder (skips .gitkeep and other non-image files)
+    return sorted(p for p in Path(folder).glob("*") if p.suffix.lower() in IMAGE_EXTENSIONS)
 
 
 def get_intrinsics(width=None, height=None):
@@ -87,9 +94,11 @@ def build_scene_from_rgbd_sequence(color_dir, depth_dir, voxel_size=0.03):
     sequence of color+depth images. The files must have
     the same name in color_dir and depth_dir, sorted alphabetically
     """
-    color_files = sorted(Path(color_dir).glob("*"))
-    depth_files = sorted(Path(depth_dir).glob("*"))
+    color_files = list_images(color_dir)
+    depth_files = list_images(depth_dir)
 
+    if not color_files:
+        raise FileNotFoundError(f"No images found in {color_dir}")
     if len(color_files) != len(depth_files):
         raise ValueError("The number of color and depth images do not match")
 

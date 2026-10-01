@@ -13,9 +13,17 @@ CHECKPOINT_DIR = ROOT_DIR / "checkpoints"
 SAM_CHECKPOINT = CHECKPOINT_DIR / "sam_vit_b_01ec64.pth"
 SAM_MODEL_TYPE = "vit_b"
 
+# SegFormer fine-tuned on Cityscapes (Hugging Face, downloaded on first use, ~15 MB)
+# For better accuracy but slower inference: "nvidia/segformer-b2-finetuned-cityscapes-1024-1024"
+SEGFORMER_MODEL = "nvidia/segformer-b0-finetuned-cityscapes-1024-1024"
+# Images are resized (aspect ratio kept) to about this many pixels before inference:
+# higher = finer details but slower (512*512 ~ 1 s per image on a laptop CPU)
+SEGFORMER_INPUT_PIXELS = 512 * 512
+
 # -----------------------------------------------------------------------
 # Cityscapes Classes (label_id -> name)
-# These are the native classes of DeepLabV3 trained on Cityscapes (19 classes)
+# These are the 19 output classes of SegFormer fine-tuned on Cityscapes, in the same order
+# ("cyclist" = Cityscapes "rider")
 # -----------------------------------------------------------------------
 CITYSCAPES_CLASSES = {
     0: "road",
@@ -83,5 +91,6 @@ DEFAULT_INTRINSICS = {
 }
 
 # Scale factor for depth (depth_raw / DEPTH_SCALE = depth in meters)
-DEPTH_SCALE = 1000.0
+# TUM RGB-D (the sample data in data/): 5000 -- RealSense / Azure Kinect: 1000
+DEPTH_SCALE = 5000.0
 DEPTH_TRUNC = 6.0  # truncate depth beyond 6 meters (filters noise)

@@ -17,7 +17,7 @@ import argparse
 from pathlib import Path
 
 from semantic_segmentation import segment_image
-from reconstruction import build_scene_from_rgbd_sequence, reconstruct_mesh
+from reconstruction import build_scene_from_rgbd_sequence, reconstruct_mesh, list_images
 from fusion_2d_3d import fuse_sequence
 import open3d as o3d
 
@@ -31,7 +31,7 @@ def run_pipeline(data_dir, output_dir, use_sam=True, make_mesh=False, voxel_size
     seg_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    color_files = sorted(color_dir.glob("*"))
+    color_files = list_images(color_dir)
     if not color_files:
         raise FileNotFoundError(f"No images found in {color_dir}")
 
