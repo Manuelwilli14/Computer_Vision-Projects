@@ -5,12 +5,14 @@
 
 Principle:
 - For each RGB-D frame used during reconstruction, we have:
-    - the color image (and therefore pixel coordinates (u, v))
     - the depth image (used to generate the 3D points)
-    - the corresponding 2D semantic mask (computed via semantic_segmentation.py)
-- Since create_from_rgbd_image generates points in the same order as pixels
-  (ignoring zero-depth pixels), we can recover for each 3D point the original
-  pixel (u, v) and therefore its semantic label.
+    - the corresponding 2D semantic mask (computed via semantic_segmentation.py),
+      with the same size as the depth image
+- Each pixel (u, v) with a valid depth is back-projected into a 3D point that
+  keeps the label of pixel (u, v) in the mask.
+- The frames are placed in the scene like in reconstruction.py (camera poses of the
+  dataset, or ICP), then the points are downsampled by voxel with a majority vote
+  on the labels.
 - Each point is colored according to its super-category for the final visualization.
 """
 
@@ -21,29 +23,28 @@ import numpy as np
 import open3d as o3d
 
 from config import SUPER_CATEGORIES, SUPER_CATEGORY_COLORS, DEPTH_SCALE, DEPTH_TRUNC
-from reconstruction import get_intrinsics, list_images, register_and_merge
+from reconstruction import CAMERA_TO_DISPLAY, get_intrinsics, list_images, load_camera, register_and_merge
 
 SUPER_CAT_LIST = list(SUPER_CATEGORIES.keys())
 # Row i = RGB color (0-1) of the super-category with ID i
 SUPER_CAT_PALETTE = np.array([SUPER_CATEGORY_COLORS[c] for c in SUPER_CAT_LIST]) / 255.0
 
 
-def project_labels_to_pointcloud(color_path, depth_path, label_map, intrinsic=None):
+def project_labels_to_points(depth_path, label_map, intrinsic=None, depth_scale=DEPTH_SCALE, pose=None):
     """
-    Recreates the point cloud for a frame and assigns, point by point,
-    the color of the corresponding super-category (from label_map).
+    Back-projects the pixels of a frame that have a valid depth and returns their
+    3D points (N, 3) with their super-category IDs (N,) read from label_map.
 
     label_map : array (H, W) of integers (indices into SUPER_CAT_LIST), generated
                 by semantic_segmentation.segment_image and saved as .npy
+    pose      : camera-to-world 4x4 matrix (see reconstruction.rgbd_to_pointcloud)
     """
-    color_raw = o3d.io.read_image(str(color_path))
-    depth_raw = o3d.io.read_image(str(depth_path))
-    depth_np = np.asarray(depth_raw) / DEPTH_SCALE
+    depth_np = np.asarray(o3d.io.read_image(str(depth_path))) / depth_scale
 
     h, w = depth_np.shape
     if label_map.shape != (h, w):
         raise ValueError(
-            f"Label map {label_map.shape} does not match depth image {(h, w)} for {color_path}. "
+            f"Label map {label_map.shape} does not match depth image {(h, w)} for {depth_path}. "
             "Re-run semantic_segmentation.py to regenerate the .labels.npy files."
         )
     if intrinsic is None:
@@ -52,19 +53,47 @@ def project_labels_to_pointcloud(color_path, depth_path, label_map, intrinsic=No
     fx, fy = intrinsic.get_focal_length()
     cx, cy = intrinsic.get_principal_point()
 
-    # Back-project every valid pixel (u, v) at once, in the same order as
-    # the pixels (row by row), like create_from_rgbd_image does
+    # Back-project every valid pixel (u, v) at once
     v, u = np.nonzero((depth_np > 0) & (depth_np <= DEPTH_TRUNC))
     z = depth_np[v, u]
     x = (u - cx) * z / fx
     y = (v - cy) * z / fy
-
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(np.stack([x, y, z], axis=1))
-    pcd.colors = o3d.utility.Vector3dVector(SUPER_CAT_PALETTE[label_map[v, u]])
+    points = np.stack([x, y, z], axis=1)
 
     # same transformation as in reconstruction.rgbd_to_pointcloud
-    pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+    transform = CAMERA_TO_DISPLAY if pose is None else pose
+    points = points @ transform[:3, :3].T + transform[:3, 3]
+    return points, label_map[v, u]
+
+
+def voxel_down_sample_labels(points, labels, voxel_size):
+    """
+    Voxel downsampling of labeled points: one point per voxel, at the mean position of
+    its points, with the MAJORITY label. (Open3D's voxel_down_sample would average the
+    class colors, giving colors that belong to no class.)
+    """
+    if len(points) == 0:
+        return points, labels
+
+    voxels = np.floor(points / voxel_size).astype(np.int64)
+    voxels -= voxels.min(axis=0)
+    dims = voxels.max(axis=0) + 1
+    keys = (voxels[:, 0] * dims[1] + voxels[:, 1]) * dims[2] + voxels[:, 2]
+    _, voxel_ids, counts = np.unique(keys, return_inverse=True, return_counts=True)
+
+    centers = np.stack(
+        [np.bincount(voxel_ids, weights=points[:, k]) for k in range(3)], axis=1
+    ) / counts[:, None]
+    n_classes = len(SUPER_CAT_LIST)
+    votes = np.bincount(voxel_ids * n_classes + labels, minlength=len(counts) * n_classes)
+    return centers, votes.reshape(-1, n_classes).argmax(axis=1)
+
+
+def labels_to_pointcloud(points, labels):
+    #Point cloud colored by super-category
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points)
+    pcd.colors = o3d.utility.Vector3dVector(SUPER_CAT_PALETTE[labels])
     return pcd
 
 
@@ -73,32 +102,51 @@ def fuse_sequence(color_dir, depth_dir, label_dir, output_path, voxel_size=0.03)
     Builds a fused semantic point cloud for an entire sequence.
 
     label_dir must contain one .labels.npy file per frame, with the same
-    base name as the color/depth images (output of
-    semantic_segmentation.segment_image).
+    base name as the color images (output of semantic_segmentation.segment_image).
+    The frames are placed like in reconstruction.build_scene_from_rgbd_sequence:
+    with the camera poses of the dataset when available, otherwise with ICP.
     """
     color_files = list_images(color_dir)
     depth_files = list_images(depth_dir)
-    label_files = sorted(Path(label_dir).glob("*.labels.npy"))
-
-    if not (len(color_files) == len(depth_files) == len(label_files)):
+    if len(color_files) != len(depth_files):
         raise ValueError(
-            f"Inconsistent number of files: "
-            f"{len(color_files)} color, {len(depth_files)} depth, "
-            f"{len(label_files)} labels"
+            f"Inconsistent number of files: {len(color_files)} color, {len(depth_files)} depth"
         )
 
-    pointclouds = []
-    for color_f, depth_f, label_f in zip(color_files, depth_files, label_files):
-        label_map = np.load(label_f)
-        pcd = project_labels_to_pointcloud(color_f, depth_f, label_map)
-        pcd = pcd.voxel_down_sample(voxel_size)
-        pointclouds.append(pcd)
-        print(f"Semantic frame added: {color_f.name} -> {len(pcd.points)} points")
+    # Each color image is paired with its labels by name (other files in label_dir are ignored)
+    label_files = [Path(label_dir) / f"{f.stem}.labels.npy" for f in color_files]
+    missing = [f.name for f in label_files if not f.exists()]
+    if missing:
+        raise FileNotFoundError(
+            f"{len(missing)} label file(s) missing in {label_dir} (e.g. {missing[0]}): "
+            "run semantic_segmentation.py on every frame first"
+        )
 
-    # Same ICP alignment as reconstruction.build_scene_from_rgbd_sequence
-    # (ICP only uses geometry, so the semantic colors do not affect it)
-    scene = register_and_merge(pointclouds, voxel_size)
+    intrinsic, depth_scale, poses = load_camera(Path(color_dir).parent)
+    if poses is not None and len(poses) != len(color_files):
+        raise ValueError(f"{len(poses)} poses in poses.txt for {len(color_files)} images")
 
+    frames = []  # (points, labels) of each frame
+    for i, (color_f, depth_f, label_f) in enumerate(zip(color_files, depth_files, label_files)):
+        pose = None if poses is None else poses[i]
+        points, labels = project_labels_to_points(depth_f, np.load(label_f), intrinsic, depth_scale, pose)
+        frames.append(voxel_down_sample_labels(points, labels, voxel_size))
+        print(f"Semantic frame added: {color_f.name} -> {len(frames[-1][0])} points")
+
+    if poses is None:
+        # Same ICP alignment as reconstruction.build_scene_from_rgbd_sequence
+        # (ICP only uses geometry; it moves the cloud of each frame in place)
+        pointclouds = [labels_to_pointcloud(points, labels) for points, labels in frames]
+        register_and_merge(pointclouds, voxel_size)
+        frames = [(np.array(pcd.points), labels) for pcd, (_, labels) in zip(pointclouds, frames)]
+
+    points = np.concatenate([points for points, _ in frames])
+    labels = np.concatenate([labels for _, labels in frames])
+    if len(frames) > 1:
+        # Overlapping frames give several points for the same surface: keep one per voxel
+        points, labels = voxel_down_sample_labels(points, labels, voxel_size)
+
+    scene = labels_to_pointcloud(points, labels)
     scene, _ = scene.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
 
     o3d.io.write_point_cloud(str(output_path), scene)

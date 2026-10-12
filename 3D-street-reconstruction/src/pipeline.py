@@ -3,8 +3,12 @@ Full pipeline: 2D semantic segmentation -> 3D reconstruction -> 2D/3D fusion.
 
 Expected data structure:
 data/
-├── color/   (RGB images: 0001.png, 0002.png, ...)
-└── depth/   (aligned 16-bit depth images: 0001.png, 0002.png, ...)
+├── color/        (RGB images: 0001.png, 0002.png, ...)
+├── depth/        (aligned 16-bit depth images: 0001.png, 0002.png, ...)
+├── camera.json   (optional: intrinsics + depth scale, see reconstruction.load_camera)
+└── poses.txt     (optional: camera poses; without them the frames are aligned with ICP)
+
+A Stray Scanner recording (iPhone LiDAR) is converted to this structure by import_stray.py.
 
 Outputs generated in outputs/:
 ├── segmentations/      (colored masks + .labels.npy per frame)

@@ -10,6 +10,10 @@ checkpoints/*.pth
 checkpoints/*.pt
 
 # Données (gros fichiers, à ne pas committer)
+# (dossiers de datasets, ex: data/stray_xxx/ créés par import_stray.py)
+data/*/
+!data/color/
+!data/depth/
 data/color/*
 data/depth/*
 !data/color/.gitkeep

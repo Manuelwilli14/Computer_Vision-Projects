@@ -44,11 +44,13 @@ RGB-D / multi-view images
 ├── requirements.txt
 ├── data/
 │   ├── color/             # RGB images
-│   └── depth/             # aligned 16-bit depth images (same count, same order)
+│   ├── depth/             # aligned 16-bit depth images (same count, same order)
+│   └── stray_xxx/         # datasets imported from Stray Scanner (same layout + camera.json, poses.txt)
 ├── src/
 │   ├── config.py
+│   ├── import_stray.py            # Stray Scanner (iPhone LiDAR) recording → dataset folder
 │   ├── semantic_segmentation.py   # SegFormer-B0 (Cityscapes) + SAM
-│   ├── reconstruction.py          # Open3D RGB-D / SfM → point cloud
+│   ├── reconstruction.py          # Open3D RGB-D → point cloud (camera poses or ICP)
 │   ├── fusion_2d_3d.py            # projection of labels onto 3D point cloud
 │   ├── visualize.py               # Open3D display
 │   └── pipeline.py                # full orchestration
@@ -98,6 +100,30 @@ python src/visualize.py outputs/scene_semantic.ply
 
 > **Depth scale:** set `DEPTH_SCALE` in `src/config.py` to match your sensor
 > (5000 for TUM RGB-D, the sample data; 1000 for RealSense / Azure Kinect).
+> A dataset folder can override it, and the camera intrinsics, with a `camera.json` file (see below).
+
+## Your Own Street: iPhone / iPad LiDAR (Stray Scanner)
+
+1. Record the street with the free [Stray Scanner](https://apps.apple.com/app/id1557051662) app
+   (iPhone / iPad **Pro** with LiDAR). Stay within ~5 m of what you film (LiDAR range) and move slowly.
+2. Copy the recording folder (`rgb.mp4`, `depth/`, `confidence/`, `odometry.csv`...) to your computer.
+3. Import it, then run the pipeline on the created dataset folder:
+
+```bash
+python src/import_stray.py path/to/recording data/my_street      # --step 10: keep 1 frame out of 10
+python src/pipeline.py --data_dir data/my_street --output_dir outputs/my_street --no-sam
+```
+
+The import keeps 1 frame out of N, puts the frames upright (portrait recordings), drops the low-confidence
+LiDAR depth, and writes two extra files to the dataset folder:
+
+| File | Content |
+|---|---|
+| `camera.json` | intrinsics of the images (`width`, `height`, `fx`, `fy`, `cx`, `cy`) + `depth_scale` (1000: millimeters) |
+| `poses.txt` | camera-to-world 4x4 matrix of each frame (16 values per line), recorded by the iPhone (ARKit) |
+
+When `poses.txt` exists, the reconstruction and the fusion place the frames with these poses
+instead of aligning them with ICP.
 
 ## Detected Semantic Classes
 
