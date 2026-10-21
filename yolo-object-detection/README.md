@@ -74,8 +74,8 @@ yolo-object-detection/
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/your-username/yolo-object-detection.git
-cd yolo-object-detection
+git clone https://github.com/Manuelwilli14/Computer_Vision-Projects.git 
+cd Computer_Vision-Projects/yolo-object-detection
 ```
 
 ### 2. Create a virtual environment (recommended)
